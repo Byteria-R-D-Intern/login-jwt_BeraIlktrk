@@ -10,13 +10,16 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.staj.login_jwt.domain.entity.User;
 import com.staj.login_jwt.domain.entity.UserDetails;
 import com.staj.login_jwt.domain.service.UserDetailsService;
+import com.staj.login_jwt.domain.service.UserService;
 import com.staj.login_jwt.presentation.dto.UserDetailsDto;
 import com.staj.login_jwt.util.JwtUtil;
-import com.staj.login_jwt.domain.entity.User;
-import com.staj.login_jwt.domain.service.UserService;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
 // DTO for role update
@@ -29,6 +32,7 @@ class UpdateUserRoleRequest {
     public void setNewRole(String newRole) { this.newRole = newRole; }
 }
 
+@Tag(name = "Kullanıcı Detayları ve Rol Yönetimi", description = "Kullanıcı detayları ve rol işlemleri için endpointler")
 @RestController
 @RequestMapping("/user")
 public class UserDetailsController {
@@ -43,45 +47,49 @@ public class UserDetailsController {
         this.userService = userService;
     }
     
+    @Operation(
+        summary = "Kullanıcı detaylarını getir (hibrit)",
+        description = "Kullanıcı kendi detayını görebilir. Admin ise userId parametresi ile başka bir kullanıcının detayını da görebilir. Authorization header'ında geçerli bir JWT token olmalıdır."
+    )
     @GetMapping("/details")
-    public ResponseEntity<?> getUserDetails(@RequestHeader("Authorization") String authorizationHeader) {
+    public ResponseEntity<?> getUserDetails(
+        @Parameter(description = "Bearer JWT token içeren Authorization header") @RequestHeader("Authorization") String authorizationHeader,
+        @Parameter(description = "(Sadece admin için) Detayları görüntülenecek kullanıcının userId'si") @org.springframework.web.bind.annotation.RequestParam(required = false) Long userId
+    ) {
         try {
-            // Token kontrolü
             if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
                 return ResponseEntity.status(401).body("Authorization header is missing or invalid");
             }
-            
             String token = authorizationHeader.substring(7);
-            
-            // Token geçerliliği kontrolü
             if (!jwtUtil.validateToken(token)) {
                 return ResponseEntity.status(401).body("Token is invalid or expired");
             }
-            // Rol kontrolü (sadece admin erişebilir)
             String role = jwtUtil.extractUserRole(token);
-            if (!"admin".equals(role)) {
-                return ResponseEntity.status(403).body("Yetkiniz yok! Sadece admin erişebilir.");
+            Long tokenUserId = jwtUtil.extractUserId(token);
+            Long targetUserId = ("admin".equals(role) && userId != null) ? userId : tokenUserId;
+            if (!"admin".equals(role) && userId != null && !userId.equals(tokenUserId)) {
+                return ResponseEntity.status(403).body("Yetkiniz yok! Sadece admin başka kullanıcı için detay görüntüleyebilir.");
             }
-            // Token'dan userId çıkar
-            Long userId = jwtUtil.extractUserId(token);
-            
-            // Kullanıcı detaylarını getir
-            UserDetails userDetails = userDetailsService.getUserDetails(userId);
-            
+            UserDetails userDetails = userDetailsService.getUserDetails(targetUserId);
             if (userDetails == null) {
                 return ResponseEntity.status(404).body("User details not found");
             }
-            
             return ResponseEntity.ok(userDetails);
-            
         } catch (Exception e) {
-            return ResponseEntity.status(500).body("Internal server error: " + e.getMessage());
+            return ResponseEntity.status(500).body("Bir hata oluştu: " + e.getMessage());
         }
     }
 
+    @Operation(
+        summary = "Kullanıcı detayları oluştur (hibrit)",
+        description = "Kullanıcı kendi detayını ekleyebilir. Admin ise userId parametresi ile başka bir kullanıcı için de detay ekleyebilir. Authorization header'ında geçerli bir JWT token olmalıdır."
+    )
     @PostMapping("/details")
-    public ResponseEntity<?> createUserDetails(@RequestHeader("Authorization") String authorizationHeader,
-                                               @Valid @RequestBody UserDetailsDto userDetailsDto) {
+    public ResponseEntity<?> createUserDetails(
+        @Parameter(description = "Bearer JWT token içeren Authorization header") @RequestHeader("Authorization") String authorizationHeader,
+        @Parameter(description = "Kullanıcı detay bilgileri DTO") @Valid @RequestBody UserDetailsDto userDetailsDto,
+        @Parameter(description = "(Sadece admin için) Detay eklenecek kullanıcının userId'si") @org.springframework.web.bind.annotation.RequestParam(required = false) Long userId
+    ) {
         try {
             if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
                 return ResponseEntity.status(401).body("Authorization header is missing or invalid");
@@ -90,26 +98,38 @@ public class UserDetailsController {
             if (!jwtUtil.validateToken(token)) {
                 return ResponseEntity.status(401).body("Token is invalid or expired");
             }
-            Long userId = jwtUtil.extractUserId(token);
-            UserDetails existing = userDetailsService.getUserDetails(userId);
+            String role = jwtUtil.extractUserRole(token);
+            Long tokenUserId = jwtUtil.extractUserId(token);
+            Long targetUserId = ("admin".equals(role) && userId != null) ? userId : tokenUserId;
+            if (!"admin".equals(role) && userId != null && !userId.equals(tokenUserId)) {
+                return ResponseEntity.status(403).body("Yetkiniz yok! Sadece admin başka kullanıcı için detay ekleyebilir.");
+            }
+            UserDetails existing = userDetailsService.getUserDetails(targetUserId);
             if (existing != null) {
                 return ResponseEntity.status(409).body("User details already exist");
             }
             UserDetails userDetails = new UserDetails();
-            userDetails.setUserId(userId);
+            userDetails.setUserId(targetUserId);
             userDetails.setAddress(userDetailsDto.getAddress());
             userDetails.setPhoneNumber(userDetailsDto.getPhoneNumber());
             userDetails.setBirthDate(userDetailsDto.getBirthDate() != null ? userDetailsDto.getBirthDate().toString() : null);
             UserDetails saved = userDetailsService.saveUserDetails(userDetails);
             return ResponseEntity.status(201).body(saved);
         } catch (Exception e) {
-            return ResponseEntity.status(500).body("Internal server error: " + e.getMessage());
+            return ResponseEntity.status(500).body("Bir hata oluştu: " + e.getMessage());
         }
     }
 
+    @Operation(
+        summary = "Kullanıcı detaylarını güncelle (hibrit)",
+        description = "Kullanıcı kendi detayını güncelleyebilir. Admin ise userId parametresi ile başka bir kullanıcı için de detay güncelleyebilir. Authorization header'ında geçerli bir JWT token olmalıdır."
+    )
     @PutMapping("/details")
-    public ResponseEntity<?> updateUserDetails(@RequestHeader("Authorization") String authorizationHeader,
-                                               @Valid @RequestBody UserDetailsDto userDetailsDto) {
+    public ResponseEntity<?> updateUserDetails(
+        @Parameter(description = "Bearer JWT token içeren Authorization header") @RequestHeader("Authorization") String authorizationHeader,
+        @Parameter(description = "Güncellenecek kullanıcı detay bilgileri DTO") @Valid @RequestBody UserDetailsDto userDetailsDto,
+        @Parameter(description = "(Sadece admin için) Detay güncellenecek kullanıcının userId'si") @org.springframework.web.bind.annotation.RequestParam(required = false) Long userId
+    ) {
         try {
             if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
                 return ResponseEntity.status(401).body("Authorization header is missing or invalid");
@@ -118,8 +138,13 @@ public class UserDetailsController {
             if (!jwtUtil.validateToken(token)) {
                 return ResponseEntity.status(401).body("Token is invalid or expired");
             }
-            Long userId = jwtUtil.extractUserId(token);
-            UserDetails existing = userDetailsService.getUserDetails(userId);
+            String role = jwtUtil.extractUserRole(token);
+            Long tokenUserId = jwtUtil.extractUserId(token);
+            Long targetUserId = ("admin".equals(role) && userId != null) ? userId : tokenUserId;
+            if (!"admin".equals(role) && userId != null && !userId.equals(tokenUserId)) {
+                return ResponseEntity.status(403).body("Yetkiniz yok! Sadece admin başka kullanıcı için detay güncelleyebilir.");
+            }
+            UserDetails existing = userDetailsService.getUserDetails(targetUserId);
             if (existing == null) {
                 return ResponseEntity.status(404).body("User details not found");
             }
@@ -129,13 +154,19 @@ public class UserDetailsController {
             UserDetails updated = userDetailsService.saveUserDetails(existing);
             return ResponseEntity.ok(updated);
         } catch (Exception e) {
-            return ResponseEntity.status(500).body("Internal server error: " + e.getMessage());
+            return ResponseEntity.status(500).body("Bir hata oluştu: " + e.getMessage());
         }
     }
 
+    @Operation(
+        summary = "Kullanıcı rolünü güncelle (admin)",
+        description = "Sadece admin kullanıcılar, başka bir kullanıcının rolünü güncelleyebilir. Authorization header'ında geçerli bir JWT token olmalıdır."
+    )
     @PutMapping("/role")
-    public ResponseEntity<?> updateUserRole(@RequestHeader("Authorization") String authorizationHeader,
-                                            @RequestBody UpdateUserRoleRequest request) {
+    public ResponseEntity<?> updateUserRole(
+        @Parameter(description = "Bearer JWT token içeren Authorization header") @RequestHeader("Authorization") String authorizationHeader,
+        @Parameter(description = "Kullanıcı adı ve yeni rol bilgisi") @RequestBody UpdateUserRoleRequest request
+    ) {
         try {
             if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
                 return ResponseEntity.status(401).body("Authorization header is missing or invalid");
@@ -157,12 +188,19 @@ public class UserDetailsController {
             userService.saveUser(user);
             return ResponseEntity.ok("Kullanıcı rolü güncellendi");
         } catch (Exception e) {
-            return ResponseEntity.status(500).body("Internal server error: " + e.getMessage());
+            return ResponseEntity.status(500).body("Bir hata oluştu: " + e.getMessage());
         }
     }
 
-    @DeleteMapping("/details")
-    public ResponseEntity<?> deleteUserDetails(@RequestHeader("Authorization") String authorizationHeader) {
+    @Operation(
+        summary = "Kullanıcıyı sil (admin)",
+        description = "Sadece admin kullanıcılar, başka bir kullanıcının tüm detaylarını ve hesabını silebilir. Authorization header'ında geçerli bir JWT token olmalıdır."
+    )
+    @DeleteMapping("/delete/{userId}")
+    public ResponseEntity<?> deleteUserByAdmin(
+        @Parameter(description = "Bearer JWT token içeren Authorization header") @RequestHeader("Authorization") String authorizationHeader,
+        @Parameter(description = "Silinecek kullanıcının userId'si") @org.springframework.web.bind.annotation.PathVariable Long userId
+    ) {
         try {
             if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
                 return ResponseEntity.status(401).body("Authorization header is missing or invalid");
@@ -171,16 +209,22 @@ public class UserDetailsController {
             if (!jwtUtil.validateToken(token)) {
                 return ResponseEntity.status(401).body("Token is invalid or expired");
             }
-            // Admin rol kontrolü kaldırıldı, tüm kullanıcılar kendi detayını silebilir
-            Long userId = jwtUtil.extractUserId(token);
-            UserDetails existing = userDetailsService.getUserDetails(userId);
-            if (existing == null) {
-                return ResponseEntity.status(404).body("User details not found");
+            String role = jwtUtil.extractUserRole(token);
+            if (!"admin".equals(role)) {
+                return ResponseEntity.status(403).body("Yetkiniz yok! Sadece admin kullanıcılar kullanıcı silebilir.");
             }
+            // Kullanıcıyı bul
+            User user = userService.findById(userId).orElse(null);
+            if (user == null) {
+                return ResponseEntity.status(404).body("Kullanıcı bulunamadı");
+            }
+            // Önce user details silinsin (varsa)
             userDetailsService.deleteUserDetails(userId);
-            return ResponseEntity.noContent().build();
+            // Sonra user silinsin
+            userService.deleteUser(userId);
+            return ResponseEntity.ok("Kullanıcı ve detayları başarıyla silindi.");
         } catch (Exception e) {
-            return ResponseEntity.status(500).body("Internal server error: " + e.getMessage());
+            return ResponseEntity.status(500).body("Bir hata oluştu: " + e.getMessage());
         }
     }
 } 

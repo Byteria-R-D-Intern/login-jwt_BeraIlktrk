@@ -12,9 +12,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 public class LoginJwtApplication {
 
 	public static void main(String[] args) {
-		// Geçici olarak 123456 şifresi için BCrypt hash üret
-		BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-		System.out.println("123456 için BCrypt hash: " + encoder.encode("123456"));
 		SpringApplication.run(LoginJwtApplication.class, args);
 	}
 
